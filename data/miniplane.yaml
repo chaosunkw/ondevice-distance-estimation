@@ -1,0 +1,10 @@
+
+# Resolve these paths relative to the repository root.
+train: datasets/miniplane/images
+val: datasets/miniplane/images
+
+# number of classes
+nc: 1
+
+# class names
+names: ['plane']

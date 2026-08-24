@@ -1,0 +1,10 @@
+# Resolve these paths relative to the repository root.
+train: datasets/newcar/train/images
+val: datasets/newcar/val/images
+
+
+# number of classes
+nc: 1
+
+# class names
+names: ['car']
