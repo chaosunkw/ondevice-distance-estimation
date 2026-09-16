@@ -112,6 +112,93 @@ class DWConvTranspose2d(nn.ConvTranspose2d):
         super().__init__(c1, c2, k, s, p1, p2, groups=math.gcd(c1, c2))
 
 
+class TransformerLayer(nn.Module):
+    """Transformer layer with multihead attention and linear layers, optimized by removing LayerNorm."""
+
+    def __init__(self, c, num_heads):
+        """
+        Initializes a transformer layer, sans LayerNorm for performance, with multihead attention and linear layers.
+
+        See  as described in https://arxiv.org/abs/2010.11929.
+        """
+        super().__init__()
+        self.q = nn.Linear(c, c, bias=False)
+        self.k = nn.Linear(c, c, bias=False)
+        self.v = nn.Linear(c, c, bias=False)
+        self.ma = nn.MultiheadAttention(embed_dim=c, num_heads=num_heads)
+        self.fc1 = nn.Linear(c, c, bias=False)
+        self.fc2 = nn.Linear(c, c, bias=False)
+
+    def forward(self, x):
+        """Performs forward pass using MultiheadAttention and two linear transformations with residual connections."""
+        x = self.ma(self.q(x), self.k(x), self.v(x))[0] + x
+        x = self.fc2(self.fc1(x)) + x
+        return x
+#
+# import torch
+# import torch.nn as nn
+# import torch.nn.functional as F
+#
+# class TransformerLayer(nn.Module):
+#     """Optimized Transformer layer for small object detection with LayerNorm and GELU."""
+#
+#     def __init__(self, c, num_heads, dropout=0.1):
+#         super().__init__()
+#         self.q = nn.Linear(c, c, bias=False)
+#         self.k = nn.Linear(c, c, bias=False)
+#         self.v = nn.Linear(c, c, bias=False)
+#         self.attn = nn.MultiheadAttention(embed_dim=c, num_heads=num_heads, dropout=dropout, batch_first=True)
+#
+#         self.norm1 = nn.LayerNorm(c)
+#         self.norm2 = nn.LayerNorm(c)
+#
+#         self.fc1 = nn.Linear(c, c * 4)  # Expand feature for richer expression
+#         self.fc2 = nn.Linear(c * 4, c)
+#
+#         self.dropout = nn.Dropout(dropout)
+#         self.activation = nn.GELU()
+#
+#     def forward(self, x):
+#         # Self-attention with residual + norm
+#         q = self.q(x)
+#         k = self.k(x)
+#         v = self.v(x)
+#         attn_out, _ = self.attn(q, k, v)
+#         x = self.norm1(x + self.dropout(attn_out))
+#
+#         # Feedforward network with residual + norm
+#         ff_out = self.fc2(self.dropout(self.activation(self.fc1(x))))
+#         x = self.norm2(x + self.dropout(ff_out))
+#
+#         return x
+
+
+class TransformerBlock(nn.Module):
+    """A Transformer block for vision tasks with convolution, position embeddings, and Transformer layers."""
+
+    def __init__(self, c1, c2, num_heads, num_layers):
+        """Initializes a Transformer block for vision tasks, adapting dimensions if necessary and stacking specified
+        layers.
+        """
+        super().__init__()
+        self.conv = None
+        if c1 != c2:
+            self.conv = Conv(c1, c2)
+        self.linear = nn.Linear(c2, c2)  # learnable position embedding
+        self.tr = nn.Sequential(*(TransformerLayer(c2, num_heads) for _ in range(num_layers)))
+        self.c2 = c2
+
+    def forward(self, x):
+        """Processes input through an optional convolution, followed by Transformer layers and position embeddings for
+        object detection.
+        """
+        if self.conv is not None:
+            x = self.conv(x)
+        b, _, w, h = x.shape
+        p = x.flatten(2).permute(2, 0, 1)
+        return self.tr(p + self.linear(p)).permute(1, 2, 0).reshape(b, self.c2, w, h)
+
+
 class Bottleneck(nn.Module):
     """A bottleneck layer with optional shortcut and group convolution for efficient feature extraction."""
 
@@ -208,6 +295,18 @@ class C3x(C3):
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)
         self.m = nn.Sequential(*(CrossConv(c_, c_, 3, 1, g, 1.0, shortcut) for _ in range(n)))
+
+
+class C3TR(C3):
+    """C3 module with TransformerBlock for enhanced feature extraction in object detection models."""
+
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
+        """Initializes C3 module with TransformerBlock for enhanced feature extraction, accepts channel sizes, shortcut
+        config, group, and expansion.
+        """
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int(c2 * e)
+        self.m = TransformerBlock(c_, c_, 4, n)
 
 
 class C3SPP(C3):
